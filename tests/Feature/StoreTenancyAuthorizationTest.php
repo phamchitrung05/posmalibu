@@ -17,7 +17,7 @@ use App\Filament\Resources\Stores\StoreResource;
 use App\Filament\Resources\TableSessions\Pages\ListTableSessions;
 use App\Filament\Resources\TableZones\Pages\ListTableZones;
 use App\Filament\Resources\TableZones\TableZoneResource;
-use App\Filament\Resources\Users\Pages\CreateUser;
+use App\Filament\Resources\Users\Pages\ListUsers;
 use App\Filament\Resources\Users\UserResource;
 use App\Models\DiningTable;
 use App\Models\Order;
@@ -340,7 +340,7 @@ class StoreTenancyAuthorizationTest extends TestCase
             ->get(StoreResource::getUrl(panel: 'admin', tenant: $tenant))
             ->assertOk();
         $this->actingAs($owner)
-            ->get(UserResource::getUrl('create', panel: 'admin', tenant: $tenant))
+            ->get(UserResource::getUrl(panel: 'admin', tenant: $tenant))
             ->assertOk();
 
         $this->actingAs($staff)
@@ -366,7 +366,7 @@ class StoreTenancyAuthorizationTest extends TestCase
         }
     }
 
-    /** Owner tạo staff qua Filament phải tự gán tenant và không thể tạo role owner từ form. */
+    /** Owner tạo staff qua modal Filament phải tự gán tenant và giữ đúng vai trò đã chọn. */
     public function test_owner_can_create_a_staff_user_for_the_selected_store(): void
     {
         $owner = $this->owner();
@@ -377,14 +377,18 @@ class StoreTenancyAuthorizationTest extends TestCase
         Filament::setCurrentPanel('admin');
         Filament::setTenant($tenant, isQuiet: true);
 
-        Livewire::test(CreateUser::class)
+        Livewire::test(ListUsers::class)
+            ->assertActionExists('create')
+            ->mountAction('create')
+            ->assertActionMounted('create')
+            ->assertMountedActionModalSee('Họ và tên')
             ->fillForm([
                 'name' => 'Nhân viên mới',
                 'email' => 'new.staff@example.com',
                 'password' => 'password',
                 'roles' => [$staffRole->id],
             ])
-            ->call('create')
+            ->callMountedAction()
             ->assertHasNoFormErrors();
 
         $createdUser = User::query()->where('email', 'new.staff@example.com')->firstOrFail();
@@ -392,6 +396,97 @@ class StoreTenancyAuthorizationTest extends TestCase
         $this->assertSame($tenant->id, $createdUser->store_id);
         $this->assertTrue($createdUser->hasRole(UserRole::Staff->value));
         $this->assertFalse($createdUser->hasRole(UserRole::Owner->value));
+    }
+
+    /** Owner được phép tạo thêm tài khoản owner khác từ modal. */
+    public function test_owner_can_create_another_owner_via_modal(): void
+    {
+        $owner = $this->owner();
+        $tenant = Store::query()->firstOrFail();
+        $ownerRole = Role::findByName(UserRole::Owner->value);
+
+        $this->actingAs($owner);
+        Filament::setCurrentPanel('admin');
+        Filament::setTenant($tenant, isQuiet: true);
+
+        Livewire::test(ListUsers::class)
+            ->mountAction('create')
+            ->fillForm([
+                'name' => 'Quản trị viên mới',
+                'email' => 'new.owner@example.com',
+                'password' => 'password',
+                'roles' => [$ownerRole->id],
+            ])
+            ->callMountedAction()
+            ->assertHasNoFormErrors();
+
+        $createdUser = User::query()->where('email', 'new.owner@example.com')->firstOrFail();
+
+        $this->assertTrue($createdUser->hasRole(UserRole::Owner->value));
+        $this->assertTrue($createdUser->canAccessPanel(Filament::getPanel('admin')));
+    }
+
+    /** Owner không được tự đổi vai trò của chính mình từ modal edit. */
+    public function test_owner_cannot_change_own_role_via_modal(): void
+    {
+        $owner = $this->owner();
+        $tenant = $owner->store ?? Store::query()->firstOrFail();
+        $staffRole = Role::findByName(UserRole::Staff->value);
+
+        $this->actingAs($owner);
+        Filament::setCurrentPanel('admin');
+        Filament::setTenant($tenant, isQuiet: true);
+
+        Livewire::test(ListUsers::class)
+            ->mountTableAction('edit', $owner->getKey())
+            ->assertActionMounted(TestAction::make('edit')->table($owner))
+            ->assertFormFieldDisabled('roles')
+            ->fillForm(['name' => 'Chủ cửa hàng đã đổi tên'])
+            ->callMountedAction()
+            ->assertHasNoFormErrors();
+
+        $owner->refresh();
+        $this->assertSame('Chủ cửa hàng đã đổi tên', $owner->name);
+        $this->assertTrue($owner->hasRole(UserRole::Owner->value));
+        $this->assertFalse($owner->hasRole($staffRole->name));
+    }
+
+    /** Owner vẫn chỉnh sửa được vai trò của tài khoản khác. */
+    public function test_owner_can_promote_staff_to_owner_via_modal(): void
+    {
+        $owner = $this->owner();
+        $staff = $this->staff();
+        $ownerRole = Role::findByName(UserRole::Owner->value);
+
+        $this->actingAs($owner);
+        Filament::setCurrentPanel('admin');
+        Filament::setTenant($staff->store, isQuiet: true);
+
+        Livewire::test(ListUsers::class)
+            ->mountTableAction('edit', $staff->getKey())
+            ->assertFormFieldEnabled('roles')
+            ->fillForm(['roles' => [$ownerRole->id]])
+            ->callMountedAction()
+            ->assertHasNoFormErrors();
+
+        $staff->refresh();
+        $this->assertTrue($staff->hasRole(UserRole::Owner->value));
+    }
+
+    /** Owner không thấy nút xóa chính mình trong bảng tài khoản. */
+    public function test_owner_cannot_delete_self(): void
+    {
+        $owner = $this->owner();
+        $staff = $this->staff();
+        $tenant = $owner->store ?? Store::query()->firstOrFail();
+
+        $this->actingAs($owner);
+        Filament::setCurrentPanel('admin');
+        Filament::setTenant($tenant, isQuiet: true);
+
+        Livewire::test(ListUsers::class)
+            ->assertTableActionHidden('delete', $owner)
+            ->assertTableActionVisible('delete', $staff);
     }
 
     /** Bảng Filament chỉ được render sản phẩm thuộc tenant trên request hiện tại. */

@@ -3,12 +3,14 @@
 namespace App\Filament\Resources\Users\Tables;
 
 use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Support\Colors\Color;
 use Filament\Support\Enums\Size;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 
 class UsersTable
 {
@@ -31,6 +33,12 @@ class UsersTable
                     ->tooltip('Chỉnh sửa')
                     ->size(Size::Medium)
                     ->color(Color::Orange),
+                DeleteAction::make()
+                    ->iconButton()
+                    ->tooltip('Xóa')
+                    ->size(Size::Medium)
+                    ->color(Color::Red)
+                    ->visible(fn (Model $record): bool => $record->getKey() !== auth()->id()),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
